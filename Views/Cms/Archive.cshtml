@@ -1,10 +1,127 @@
+@using System.Net;
+@using Newtonsoft.Json;
+@using System.Net.Http;
+@using Piranha.Extend.Blocks;
+@using System;
+@using System.Threading.Tasks;
+@using NewsBlog.Models;
+@using NewsAPI.Models;
+@using Piranha.Models;
+
 @model StandardArchive
-@{
+
+@{ 
     ViewData["Title"] = !string.IsNullOrEmpty(Model.MetaTitle) ? Model.MetaTitle : Model.Title;
     var hasImage = Model.PrimaryImage.HasValue;
-
     var posts = Model.Archive.Posts.Count;
+
+    if (posts == 0)
+    {
+        
+    @*
+        The following code gets the country code,
+        which is needed to display relevant articles.
+        It worked for me on localhost, but due to not enough
+        time to test it, it is commented out.
+
+    // To be moved in appsettings
+    string AccessKey = "94295989dbcab9a0dced65727e4b11d8";
+    // Trying to get user's IP
+    string UserIP = Context.Connection.RemoteIpAddress.ToString();
+    string url = "http://api.ipstack.com/" + UserIP + "?access_key=" + AccessKey;
+    WebClient client = new WebClient();
+    string jsonstring = client.DownloadString(url);
+    dynamic dynObj = JsonConvert.DeserializeObject(jsonstring);
+    var countryCode = (string)dynObj.country_code;
+    *@
+
+
+    // Defaulting to GB
+    var countryCode = "GB";
+    var newsArticles = await NewsAPIConfig.GetArticlesAsync(countryCode);
+    await SavePosts(newsArticles);
+    }
+
+
+    // This method is used to retrieve and upload article images
+    async Task<Guid> DownloadImageAsync(Uri uri)
+    {
+        using var httpClient = new HttpClient();
+
+        // Get the file extension
+        var uriWithoutQuery = uri.GetLeftPart(UriPartial.Path);
+        var fileExtension = System.IO.Path.GetExtension(uriWithoutQuery);
+
+        // Download the image and write to the file
+        var imageBytes = await httpClient.GetByteArrayAsync(uri);
+
+        var id = Guid.NewGuid();
+
+        // Saving asynchronously the iamge
+        await WebApp.Api.Media.SaveAsync(new BinaryMediaContent
+        {
+            Id = id,
+            Filename = id + fileExtension,
+            Data = imageBytes
+        });
+
+        // We need the GUID to assign current image to article
+        return id;
+    }
+
+    // The method is used to save all articles in the form of "posts"
+    // All required fields are set and displayed later on
+    async Task SavePosts(List<Article> articles)
+    {
+        foreach (var article in articles)
+        {
+            // Assign values
+            var post = await StandardPost.CreateAsync(WebApp.Api);
+            post.BlogId = Model.Id;
+            post.Category = "Uncategorised";
+            post.Title = article.Title;
+            post.MetaKeywords = article.Source.Name;
+
+            var meta = string.Empty;
+
+            // Meta Description allows only 255 chars
+            if (article.Description?.Length > 255)
+            {
+                meta = article.Description?.Substring(0, 255);
+            }
+
+            post.MetaDescription = meta;
+
+            // If image not null we process it
+            if (!string.IsNullOrEmpty(article.UrlToImage))
+            {
+                var uri = new Uri(article.UrlToImage, UriKind.Absolute);
+                var img = await DownloadImageAsync(uri);
+                post.PrimaryImage = img;
+            }
+
+            post.Excerpt = article.Description ?? string.Empty;
+            post.OgTitle = article.Author;
+            post.Published = article.PublishedAt;
+
+            // Unfortunately the NewsAPI
+            // Does not display the entire content
+            // Ex. [+8340 more chars]
+            if (!string.IsNullOrEmpty(article.Content))
+            {
+                post.Blocks.Add(new HtmlBlock
+                {
+                    Body = "<p>" + article.Content + "</p>" +
+                    "<a href=" + article.Url + "> Read full story </a>"
+                }
+                );
+            }
+
+            await WebApp.Api.Posts.SaveAsync(post);
+        }
+    }
 }
+
 @section head {
     @WebApp.MetaTags(Model)
 }
@@ -23,7 +140,6 @@
         }
     </div>
 </header>
-
 <main class="archive">
     @foreach (var block in Model.Blocks)
     {
@@ -40,7 +156,6 @@
                 @for (var i = n; i < Math.Min(posts, n + 2); i++)
                 {
                     var post = Model.Archive.Posts[i];
-
                     <div class="@(i == 0 ? "col-md-12" : "col-md-6")">
                         <article>
                             <header>
@@ -48,8 +163,7 @@
                                 {
                                     <a href="@post.Permalink">
                                         <img class="rounded mb-3" src="@Url.Content(WebApp.Media.ResizeImage(post.PrimaryImage, 1140, 450))" alt="@post.PrimaryImage.Media.AltText">
-                                    </a>
-                                }
+                                    </a>}
                                 <h3>@post.Title</h3>
                                 <p class="post-meta">
                                     <span>
@@ -59,21 +173,18 @@
                                         Tags
                                         @foreach (var tag in post.Tags)
                                         {
-                                            <a href="@Model.Permalink/tag/@tag.Slug">#@tag.Slug</a>
-                                        }
+                                            <a href="@Model.Permalink/tag/@tag.Slug">#@tag.Slug</a>}
                                     </span>
                                     @if (post.IsPublished)
                                     {
                                         <span>
                                             Published @post.Published.Value.ToShortDateString()
-                                        </span>
-                                    }
+                                        </span>}
                                     @if (post.EnableComments && post.CommentCount > 0)
                                     {
                                         <span>
                                             <a href="@post.Permalink#comments">@post.CommentCount @(post.CommentCount == 1 ? "comment" : "comments")</a>
-                                        </span>
-                                    }
+                                        </span>}
                                 </p>
                                 <p>@Html.Raw(post.Excerpt)</p>
                                 <a href="@post.Permalink" class="btn btn-primary">Read more</a>
@@ -84,8 +195,7 @@
                     {
                         n--;
                         break;
-                    }
-                }
+                    }}
             </div>
         }
     </div>
